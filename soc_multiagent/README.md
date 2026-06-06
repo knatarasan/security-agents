@@ -320,3 +320,54 @@ LangGraph replaces state fields by default. The `Annotated[list[str], operator.a
 
 **Why `asyncio.to_thread` in the FastAPI handlers?**
 `graph.invoke()` is synchronous and blocks the event loop during LLM calls. Wrapping it with `asyncio.to_thread` runs it in a thread pool, keeping the FastAPI event loop responsive to concurrent requests.
+
+---
+
+## Evaluation with W&B Weave
+
+### What was added
+
+```
+soc_multiagent/
+├── eval/
+│   ├── __init__.py
+│   ├── scorers.py           ← 5 @weave.op()-decorated scorer functions
+│   └── run_evaluation.py    ← full CLI evaluation script
+```
+
+### How it works
+
+**W&B Weave** handles LLM-level tracing. Calling `weave.init(project)` auto-patches LangChain/OpenAI/Anthropic — every prompt, completion, token count, and latency appears as a child span under the `predict_alert` trace, with no changes needed in `triage.py` or `investigation.py`.
+
+**`weave.Evaluation`** runs the pipeline on every alert and scores each prediction with all five scorers, producing a structured per-sample table in the Weave UI.
+
+**wandb** receives the aggregate metrics as scalars, plus seven rich tables/plots: confusion matrix, per-alert results, per-category accuracy, confidence calibration, latency distribution, and a key metrics summary.
+
+### Five scorers
+
+| Scorer | What it measures |
+|---|---|
+| `triage_accuracy_scorer` | Fraction of correct FP/TP classifications |
+| `false_negative_scorer` | Missed real attacks (TP classified as FP) — most dangerous failure |
+| `escalation_quality_scorer` | Wasted escalations (FP → investigate) + severe TP catch rate |
+| `confidence_calibration_scorer` | Is high confidence associated with correct predictions? |
+| `investigation_quality_scorer` | When a report was written, is it complete (MITRE, stage, response)? |
+
+### Running evaluation
+
+```bash
+# Add your W&B key to .env
+echo "WANDB_API_KEY=your_key" >> .env
+
+# With both servers running
+python -m eval.run_evaluation --count 50
+
+# Fully offline (no servers needed)
+python -m eval.run_evaluation --count 50 --offline
+
+# Reproducible run from saved dataset
+python -m eval.run_evaluation --load-dataset eval/last_run.json
+
+# Save dataset for future comparison runs
+python -m eval.run_evaluation --count 50 --offline --save-dataset eval/baseline.json
+```
