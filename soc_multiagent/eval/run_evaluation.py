@@ -357,14 +357,16 @@ def _log_to_wandb(metrics: dict, detailed: list[dict]) -> None:
     # 1. Scalar metrics
     wandb.log(metrics)
 
-    # 2. Confusion matrix
-    y_true = [r["ground_truth"] for r in detailed]
-    y_pred = [r["triage_classification"] for r in detailed]
+    # 2. Confusion matrix — wandb expects integer indices into class_names, not strings
+    _cm_classes = ["FP", "TP"]
+    _cm_map = {c: i for i, c in enumerate(_cm_classes)}
+    y_true_idx = [_cm_map[r["ground_truth"]] for r in detailed]
+    y_pred_idx = [_cm_map[r["triage_classification"]] for r in detailed]
     wandb.log({
         "confusion_matrix": wandb.plot.confusion_matrix(
-            y_true=y_true,
-            preds=y_pred,
-            class_names=["FP", "TP"],
+            y_true=y_true_idx,
+            preds=y_pred_idx,
+            class_names=_cm_classes,
         )
     })
 
@@ -633,6 +635,18 @@ async def _run(args: argparse.Namespace) -> None:
         ],
     )
 
+    async def _poll_progress(progress, task_id: int, target: int) -> None:
+        """Update the progress bar by polling len(_predictions) every 0.5 s.
+
+        Python 3.14 made built-in types immutable so list.append can no longer
+        be monkey-patched.  A polling coroutine running concurrently with the
+        evaluation is the correct approach.
+        """
+        while len(_predictions) < target:
+            progress.update(task_id, completed=len(_predictions))
+            await asyncio.sleep(0.5)
+        progress.update(task_id, completed=target)
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -643,19 +657,16 @@ async def _run(args: argparse.Namespace) -> None:
         transient=True,
     ) as progress:
         task_id = progress.add_task("Evaluating alerts…", total=len(dataset))
-
-        original_append = list.append
-
-        def _tracked_append(lst, item):
-            original_append(lst, item)
-            if lst is _predictions:
-                progress.advance(task_id)
-
-        list.append = _tracked_append  # type: ignore[method-assign]
+        eval_task = asyncio.create_task(evaluation.evaluate(predict_alert))
+        poll_task = asyncio.create_task(_poll_progress(progress, task_id, len(dataset)))
         try:
-            eval_summary = await evaluation.evaluate(predict_alert)
+            eval_summary = await eval_task
         finally:
-            list.append = original_append  # type: ignore[method-assign]
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
 
     console.print(f"[green]✓ Evaluation complete  ({len(_predictions)} predictions collected)[/green]\n")
 
