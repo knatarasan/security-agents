@@ -95,12 +95,14 @@ def _route_after_triage(state: SOCState) -> str:
 
 # ─── Graph builder ────────────────────────────────────────────────────────────
 
-def build_soc_graph() -> Any:
+def build_soc_graph(checkpointer: Any = None) -> Any:
     """
     Construct and compile the LangGraph StateGraph.
 
     Nodes are registered with their LLM dependency injected via functools.partial
     so the graph itself stays stateless and can be safely reused across requests.
+
+    Pass a checkpointer (e.g. MemorySaver) to enable CopilotKit state streaming.
 
     Returns a compiled graph ready for .invoke() / .ainvoke() calls.
     """
@@ -135,7 +137,7 @@ def build_soc_graph() -> Any:
     graph.add_edge("investigation_node", "output_node")
     graph.add_edge("output_node", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 # ─── Mermaid diagram ──────────────────────────────────────────────────────────

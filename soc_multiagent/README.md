@@ -24,6 +24,23 @@ A production-quality simulation of a Security Operations Centre (SOC) built with
 │  POST /process-batch  ──►  batch processing     │
 │  GET  /pipeline/status ─►  health + stats       │
 │  GET  /pipeline/visualize ► Mermaid diagram     │
+│  POST /copilotkit     ──►  CopilotKit runtime   │
+│  POST /response/isolate ►  host isolation       │
+│  POST /response/ticket ──►  incident ticket     │
+│  POST /response/block-ip ► IP block             │
+│  POST /analyst/override ►  classification fix   │
+│  GET  /analyst/corrections ► override history   │
+│  GET  /response/actions-log ► action audit log  │
+└───────────────────────┬─────────────────────────┘
+                        │  streaming SOCState
+                        ▼
+┌─────────────────────────────────────────────────┐
+│         React Dashboard  :5173                  │
+│                                                 │
+│  AlertFeed      ──►  SSE stream from SIEM       │
+│  PipelineViewer ──►  useCoAgent streaming       │
+│  ActionPanel    ──►  useCopilotAction / API     │
+│  CopilotSidebar ──►  Ctrl+K AI chat assistant   │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -52,16 +69,33 @@ graph TD
 soc_multiagent/
 ├── siem_simulator/
 │   ├── alert_generator.py   # Statistical alert factory — 8 categories × 3 template banks
-│   └── main.py              # FastAPI server (port 8081)
+│   └── main.py              # FastAPI server (port 8081) + CORS
 ├── soc_agents/
 │   ├── state.py             # SOCState TypedDict with operator.add log reducer
 │   ├── agents/
 │   │   ├── supervisor.py    # Entry/exit nodes: alert intake + final disposition
 │   │   ├── triage.py        # LLM Tier-1 fast-pass + supervisor escalation rule
 │   │   └── investigation.py # LLM Tier-3 forensic analysis + MITRE ATT&CK mapping
-│   ├── graph.py             # LangGraph StateGraph definition + Mermaid diagram
-│   └── main.py              # FastAPI server (port 8082)
-├── demo.py                  # Rich terminal demo: fetch 20 alerts → process → table
+│   ├── graph.py             # LangGraph StateGraph + optional MemorySaver checkpointer
+│   └── main.py              # FastAPI server (port 8082) + CopilotKit + response endpoints
+├── soc_dashboard/           # React/TypeScript/Vite dashboard
+│   ├── src/
+│   │   ├── components/      # AlertFeed, PipelineViewer, InvestigationPanel, ActionPanel…
+│   │   ├── hooks/           # useSIEMStream, usePipelineStats
+│   │   ├── api/socApi.ts    # Typed fetch wrappers for both backends
+│   │   └── types/soc.ts     # SOCState, Alert, TriageResult… TypeScript interfaces
+│   ├── package.json
+│   └── vite.config.ts       # Proxy: /api/siem → :8081, /api/soc + /copilotkit → :8082
+├── data/                    # Persistent JSON logs (created at runtime)
+│   ├── corrections.json     # Analyst override history
+│   ├── actions_log.json     # All response actions
+│   ├── tickets.json         # Created tickets
+│   └── blocked_ips.json     # Blocked IP addresses
+├── eval/
+│   ├── scorers.py           # 5 @weave.op() scorer functions
+│   └── run_evaluation.py    # CLI evaluation runner
+├── start.sh                 # One-command launcher for all three services
+├── demo.py                  # Rich terminal demo (no browser needed)
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -148,24 +182,33 @@ OPENAI_API_KEY=sk-...          # if using openai
 ANTHROPIC_API_KEY=sk-ant-...   # if using anthropic
 ```
 
-### 3. Start the SIEM simulator
+### 3. Start everything (one command)
 
 ```bash
-# Terminal A
+bash start.sh
+```
+
+This starts all three services and opens:
+- SIEM simulator at http://localhost:8081
+- SOC pipeline at http://localhost:8082
+- React dashboard at http://localhost:5173
+
+Or start services individually:
+
+```bash
+# Terminal A — SIEM simulator
 uvicorn siem_simulator.main:app --port 8081 --reload
-```
 
-### 4. Start the SOC pipeline
-
-```bash
-# Terminal B
+# Terminal B — SOC pipeline
 uvicorn soc_agents.main:app --port 8082 --reload
+
+# Terminal C — React dashboard
+cd soc_dashboard && npm install && npm run dev
 ```
 
-### 5. Run the integration demo
+### 4. Run the terminal demo (no browser needed)
 
 ```bash
-# Terminal C
 python demo.py
 ```
 
@@ -371,3 +414,72 @@ python -m eval.run_evaluation --load-dataset eval/last_run.json
 # Save dataset for future comparison runs
 python -m eval.run_evaluation --count 50 --offline --save-dataset eval/baseline.json
 ```
+
+---
+
+## CopilotKit Dashboard
+
+### What was added
+
+```
+soc_multiagent/
+├── soc_dashboard/           ← full React/TypeScript/Vite frontend
+│   └── src/
+│       ├── components/
+│       │   ├── AlertFeed.tsx          ← SSE-powered live alert list
+│       │   ├── AlertCard.tsx          ← severity-coded alert card
+│       │   ├── PipelineViewer.tsx     ← live LangGraph node visualization
+│       │   ├── InvestigationPanel.tsx ← MITRE/IOC report viewer
+│       │   ├── ActionPanel.tsx        ← response buttons + CopilotKit hooks
+│       │   ├── MetricsBar.tsx         ← live pipeline counters
+│       │   └── CorrectionModal.tsx    ← analyst override form
+│       ├── hooks/
+│       │   ├── useSIEMStream.ts       ← ReadableStream SSE hook
+│       │   └── usePipelineStats.ts    ← 5-second polling hook
+│       ├── api/socApi.ts              ← typed fetch wrappers
+│       └── types/soc.ts              ← shared TypeScript interfaces
+├── data/                    ← persistent JSON logs (created automatically)
+└── start.sh                 ← one-command launcher
+```
+
+**New backend endpoints** on port 8082:
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/copilotkit` | CopilotKit runtime — streams LangGraph SOCState |
+| `POST` | `/response/isolate` | Queue host isolation + create P1 ticket |
+| `POST` | `/response/ticket` | Create incident ticket (P1/P2/P3) |
+| `POST` | `/response/block-ip` | Block IP at perimeter firewall |
+| `POST` | `/analyst/override` | Record analyst classification correction |
+| `GET` | `/analyst/corrections` | Full correction history + triage weight |
+| `GET` | `/response/actions-log` | All actions, tickets, blocked IPs |
+
+### How it works
+
+**CopilotKit + LangGraph streaming**: `soc_agents/main.py` wraps the compiled LangGraph with `LangGraphAgent` and mounts it at `POST /copilotkit`. The graph is compiled with `MemorySaver` checkpointing enabled so CopilotKit can stream intermediate state after each node completes.
+
+**`PipelineViewer`** uses `useCoAgent("soc_pipeline")`. When an alert is clicked in the feed, the component resets SOCState, calls `run()`, and the node cards animate live as Supervisor → Triage → Investigation → Output each complete.
+
+**`ActionPanel`** exposes four `useCopilotReadable` context values (active alert, triage result, investigation report, pipeline result) and three `useCopilotAction` handlers (isolateHost, createIncidentTicket, blockIPAddress). The AI assistant in the sidebar can invoke these automatically.
+
+**Analyst correction loop**: The `CorrectionModal` lets analysts override the agent's FP/TP classification, provide reasoning, and adjust confidence. Corrections are persisted in `data/corrections.json` and fed back as a triage weight that drifts toward the analyst's historical judgement.
+
+### Starting the dashboard
+
+```bash
+# One command (recommended)
+bash start.sh
+
+# Or manually
+cd soc_dashboard
+npm install
+npm run dev        # → http://localhost:5173
+```
+
+Open http://localhost:5173. Alerts stream in from the SIEM feed on the left. Click any alert to run it through the pipeline and watch the node cards animate. Press **Ctrl+K** to open the AI analyst chat.
+
+### CopilotKit configuration
+
+The dashboard connects to the self-hosted backend — no CopilotKit cloud account is required. The `COPILOTKIT_API_KEY` in `.env.example` is optional (only needed if routing through CopilotKit cloud).
+
+If `copilotkit` is not installed, the backend degrades gracefully: `/copilotkit` endpoint is not mounted, but all REST endpoints and the terminal demo continue to work.

@@ -15,6 +15,7 @@ import json
 from typing import Annotated
 
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from siem_simulator.alert_generator import generate_alert
@@ -25,6 +26,14 @@ app = FastAPI(
     title="SIEM Alert Simulator",
     description="Simulated SIEM that emits security alerts with configurable distributions.",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:5174"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 MAX_ALERTS = 100

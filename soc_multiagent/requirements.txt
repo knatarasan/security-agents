@@ -1,3 +1,4 @@
+copilotkit>=0.1.0
 abnf==2.2.0
 annotated-doc==0.0.4
 annotated-types==0.7.0
