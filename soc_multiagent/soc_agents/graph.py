@@ -31,6 +31,13 @@ from __future__ import annotations
 
 import os
 from functools import partial
+
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Walk up two levels: soc_agents/graph.py → soc_agents/ → soc_multiagent/.env
+load_dotenv(Path(__file__).parent.parent / ".env")
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph

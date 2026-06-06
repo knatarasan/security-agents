@@ -12,6 +12,13 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Walk up one level: soc_agents/main.py → soc_multiagent/.env
+load_dotenv(Path(__file__).parent.parent / ".env")
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
