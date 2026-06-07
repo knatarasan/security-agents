@@ -2,8 +2,10 @@
 SOC Multi-Agent System — FastAPI server on port 8082.
 
 Enhanced with CopilotKit for live streaming dashboard support.
-Exposes the LangGraph SOC pipeline as a REST API.  The compiled graph is
-built once at startup and reused across all requests.
+Exposes the LangGraph SOC pipeline as a REST API.
+
+The compiled graph and CopilotKit endpoint are registered at module load so
+there is no startup race between lifespan and route registration.
 
 Start with:
     uvicorn soc_agents.main:app --port 8082 --reload
@@ -14,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,16 +31,33 @@ from pydantic import BaseModel
 from soc_agents.graph import build_soc_graph, get_mermaid_diagram
 from soc_agents.state import SOCState
 
-# ─── CopilotKit (optional) ────────────────────────────────────────────────────
+# ─── CopilotKit — correct class names for v0.1.94+ ───────────────────────────
+# v0.1.31+: CopilotKitSDK → CopilotKitRemoteEndpoint
+# v0.1.94+: LangGraphAgent → LangGraphAGUIAgent
 
+_COPILOTKIT_AVAILABLE = False
 try:
-    from copilotkit import CopilotKitSDK, LangGraphAgent
-    from copilotkit.integrations.fastapi import add_fastapi_endpoint
-    from langgraph.checkpoint.memory import MemorySaver
+    from copilotkit import CopilotKitRemoteEndpoint, LangGraphAGUIAgent  # noqa: PLC0415
+    from copilotkit.integrations.fastapi import add_fastapi_endpoint  # noqa: PLC0415
+    from langgraph.checkpoint.memory import MemorySaver  # noqa: PLC0415
 
     _COPILOTKIT_AVAILABLE = True
 except ImportError:
-    _COPILOTKIT_AVAILABLE = False
+    pass
+
+# ─── Build graph at module level ──────────────────────────────────────────────
+# Building here (not in lifespan) ensures the CopilotKit endpoint is registered
+# before any request arrives and avoids the lifespan/route-registration race.
+
+_checkpointer = MemorySaver() if _COPILOTKIT_AVAILABLE else None  # type: ignore[name-defined]
+_graph: Any = build_soc_graph(checkpointer=_checkpointer)
+
+_stats: dict = {
+    "total_processed": 0,
+    "escalated": 0,
+    "closed": 0,
+    "critical_findings": 0,
+}
 
 # ─── Persistent data files ────────────────────────────────────────────────────
 
@@ -86,41 +104,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ─── Startup / shutdown ───────────────────────────────────────────────────────
-
-_graph: Any = None
-_stats: dict = {
-    "total_processed": 0,
-    "escalated": 0,
-    "closed": 0,
-    "critical_findings": 0,
-}
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ARG001
-    """Build the LangGraph pipeline and optionally register CopilotKit endpoint."""
-    global _graph
-    checkpointer = MemorySaver() if _COPILOTKIT_AVAILABLE else None
-    _graph = build_soc_graph(checkpointer=checkpointer)
-
-    if _COPILOTKIT_AVAILABLE:
-        sdk = CopilotKitSDK(
-            agents=[
-                LangGraphAgent(
-                    name="soc_pipeline",
-                    description=(
-                        "SOC multi-agent security alert triage and investigation pipeline. "
-                        "Processes alerts through Supervisor → Triage → Investigation nodes."
-                    ),
-                    graph=_graph,
-                )
-            ]
-        )
-        add_fastapi_endpoint(app, sdk, "/copilotkit")
-
-    yield
-
+# ─── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="SOC Multi-Agent System",
@@ -129,7 +113,6 @@ app = FastAPI(
         "Supervisor → Triage → (conditional) Investigation → Output"
     ),
     version="2.0.0",
-    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -139,6 +122,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─── CopilotKit endpoint (registered at module level, not in lifespan) ────────
+
+if _COPILOTKIT_AVAILABLE:
+    _sdk = CopilotKitRemoteEndpoint(  # type: ignore[name-defined]
+        agents=[
+            LangGraphAGUIAgent(  # type: ignore[name-defined]
+                name="soc_pipeline",
+                description=(
+                    "SOC multi-agent security alert triage and investigation pipeline. "
+                    "Processes alerts through Supervisor → Triage → Investigation nodes."
+                ),
+                graph=_graph,
+            )
+        ]
+    )
+    add_fastapi_endpoint(app, _sdk, "/copilotkit")  # type: ignore[name-defined]
 
 
 # ─── Request / response models ────────────────────────────────────────────────
@@ -217,8 +217,6 @@ def _run_graph(alert: dict) -> dict:
     response_description="Completed SOCState with triage, routing, and optional investigation",
 )
 async def process_alert(request: AlertRequest) -> dict:
-    if _graph is None:
-        raise HTTPException(status_code=503, detail="Pipeline not yet initialised.")
     try:
         result = await asyncio.to_thread(_run_graph, request.alert)
         return result
@@ -232,8 +230,6 @@ async def process_alert(request: AlertRequest) -> dict:
     response_description="List of completed SOCState dicts plus error list",
 )
 async def process_batch(request: BatchRequest) -> dict:
-    if _graph is None:
-        raise HTTPException(status_code=503, detail="Pipeline not yet initialised.")
     results: list[dict] = []
     errors: list[dict] = []
     for alert in request.alerts:
@@ -253,8 +249,8 @@ async def process_batch(request: BatchRequest) -> dict:
 @app.get("/pipeline/status", summary="Pipeline health and processing statistics")
 def pipeline_status() -> dict:
     return {
-        "status": "healthy" if _graph is not None else "initialising",
-        "graph_initialised": _graph is not None,
+        "status": "healthy",
+        "graph_initialised": True,
         "copilotkit_enabled": _COPILOTKIT_AVAILABLE,
         "stats": _stats,
     }
