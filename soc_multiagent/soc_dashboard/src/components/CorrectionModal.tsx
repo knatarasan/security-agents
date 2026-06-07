@@ -1,16 +1,13 @@
 import React, { useState } from "react";
-import type { SOCState, TriageResult } from "../types/soc";
+import type { SOCState } from "../types/soc";
 import type { OverridePayload } from "../api/socApi";
+import { hasAlert, hasTriageResult } from "../socStateGuards";
 import { cn, classColor } from "../lib/utils";
 
 interface CorrectionModalProps {
   socState: SOCState | null;
   onClose: () => void;
   onSubmit: (override: OverridePayload) => void;
-}
-
-function hasTriageResult(tr: SOCState["triage_result"]): tr is TriageResult {
-  return "likely_classification" in tr;
 }
 
 export function CorrectionModal({
@@ -24,8 +21,8 @@ export function CorrectionModal({
       : "FP";
 
   const alertId =
-    socState && "alert_id" in socState.alert
-      ? (socState.alert as { alert_id: string }).alert_id
+    socState && hasAlert(socState.alert)
+      ? socState.alert.alert_id
       : "";
 
   const [analystClassification, setAnalystClassification] = useState<"FP" | "TP">(

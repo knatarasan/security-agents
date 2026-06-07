@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { useCoAgent } from "@copilotkit/react-core";
-import type { Alert, SOCState, TriageResult, InvestigationReport } from "../types/soc";
+import type { Alert, SOCState } from "../types/soc";
+import { hasInvestigation, hasTriageResult } from "../socStateGuards";
 import { cn, severityColor, classColor } from "../lib/utils";
 
 const EMPTY_SOC_STATE: SOCState = {
@@ -11,21 +12,11 @@ const EMPTY_SOC_STATE: SOCState = {
   final_disposition: "pending",
   processing_log: [],
 };
+const EMPTY_PROCESSING_LOG: string[] = [];
 
 interface PipelineViewerProps {
   activeAlert: Alert | null;
   onComplete: (state: SOCState) => void;
-}
-
-// Type guards
-function hasTriageResult(tr: SOCState["triage_result"]): tr is TriageResult {
-  return "likely_classification" in tr;
-}
-
-function hasInvestigation(
-  ir: SOCState["investigation_report"]
-): ir is InvestigationReport {
-  return ir !== null && "mitre_technique" in ir;
 }
 
 type NodeStatus = "idle" | "running" | "done" | "skipped";
@@ -126,17 +117,42 @@ export function PipelineViewer({ activeAlert, onComplete }: PipelineViewerProps)
     return () => clearTimeout(timer);
   }, [activeAlert, setState, run]);
 
+  const currentState = state ?? EMPTY_SOC_STATE;
+  const finalDisposition = currentState.final_disposition ?? "pending";
+  const routingDecision = currentState.routing_decision ?? "pending";
+  const processingLog = Array.isArray(currentState.processing_log)
+    ? currentState.processing_log
+    : EMPTY_PROCESSING_LOG;
+  const triage = hasTriageResult(currentState.triage_result)
+    ? currentState.triage_result
+    : null;
+  const investigation = hasInvestigation(currentState.investigation_report)
+    ? currentState.investigation_report
+    : null;
+
   // Notify parent when pipeline finishes
   useEffect(() => {
-    if (!running && state.final_disposition !== "pending" && activeAlert) {
-      onCompleteRef.current(state);
+    if (!running && finalDisposition !== "pending" && activeAlert) {
+      onCompleteRef.current({
+        ...EMPTY_SOC_STATE,
+        ...currentState,
+        triage_result: triage ?? {},
+        investigation_report: investigation,
+        routing_decision: routingDecision,
+        final_disposition: finalDisposition,
+        processing_log: processingLog,
+      });
     }
-  }, [running, state, activeAlert]);
-
-  const triage = hasTriageResult(state.triage_result) ? state.triage_result : null;
-  const investigation = hasInvestigation(state.investigation_report)
-    ? state.investigation_report
-    : null;
+  }, [
+    running,
+    currentState,
+    triage,
+    investigation,
+    routingDecision,
+    finalDisposition,
+    processingLog,
+    activeAlert,
+  ]);
 
   // Derive node statuses
   const supervisorStatus: NodeStatus = activeAlert
@@ -155,19 +171,26 @@ export function PipelineViewer({ activeAlert, onComplete }: PipelineViewerProps)
     ? "running"
     : "idle";
 
+  const routesToInvestigation =
+    routingDecision === "escalate" ||
+    routingDecision === "escalate_to_investigation";
+  const routesToClose =
+    routingDecision === "close" ||
+    routingDecision === "close_fp" ||
+    routingDecision === "monitor";
   const investigationStatus: NodeStatus = !activeAlert
     ? "idle"
     : investigation
     ? "done"
-    : state.routing_decision === "escalate" && running
+    : routesToInvestigation && running
     ? "running"
-    : state.routing_decision === "close_fp" || state.routing_decision === "monitor"
+    : routesToClose
     ? "skipped"
     : "idle";
 
   const outputStatus: NodeStatus = !activeAlert
     ? "idle"
-    : !running && state.final_disposition !== "pending"
+    : !running && finalDisposition !== "pending"
     ? "done"
     : running
     ? "running"
@@ -177,9 +200,9 @@ export function PipelineViewer({ activeAlert, onComplete }: PipelineViewerProps)
   const logEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [state.processing_log]);
+  }, [processingLog]);
 
-  const displayedLogs = state.processing_log.slice(-6);
+  const displayedLogs = processingLog.slice(-6);
 
   return (
     <div className="flex flex-col h-full p-3 gap-3">
@@ -194,7 +217,7 @@ export function PipelineViewer({ activeAlert, onComplete }: PipelineViewerProps)
             ANALYZING
           </span>
         )}
-        {!running && activeAlert && state.final_disposition !== "pending" && (
+        {!running && activeAlert && finalDisposition !== "pending" && (
           <span className="flex items-center gap-1 text-[10px] font-mono text-green-400">
             <span className="h-1.5 w-1.5 rounded-full bg-green-400" />
             COMPLETE
@@ -311,12 +334,12 @@ export function PipelineViewer({ activeAlert, onComplete }: PipelineViewerProps)
 
             {/* Output */}
             <PipelineNode title="Output" status={outputStatus}>
-              {state.final_disposition !== "pending" ? (
+              {finalDisposition !== "pending" ? (
                 <span
                   className="text-[9px] font-mono text-gray-300 leading-relaxed line-clamp-3"
-                  title={state.final_disposition}
+                  title={finalDisposition}
                 >
-                  {state.final_disposition}
+                  {finalDisposition}
                 </span>
               ) : (
                 <span className="text-[9px] text-gray-700 font-mono">

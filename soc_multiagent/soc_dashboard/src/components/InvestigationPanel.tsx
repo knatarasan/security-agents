@@ -1,18 +1,9 @@
-import type { SOCState, TriageResult, InvestigationReport } from "../types/soc";
+import type { SOCState, InvestigationReport } from "../types/soc";
+import { hasInvestigation, hasTriageResult } from "../socStateGuards";
 import { cn, classColor } from "../lib/utils";
 
 interface InvestigationPanelProps {
   socState: SOCState | null;
-}
-
-function hasTriageResult(tr: SOCState["triage_result"]): tr is TriageResult {
-  return "likely_classification" in tr;
-}
-
-function hasInvestigation(
-  ir: SOCState["investigation_report"]
-): ir is InvestigationReport {
-  return ir !== null && ir !== undefined && "mitre_technique" in ir;
 }
 
 function severityAssessmentColor(
