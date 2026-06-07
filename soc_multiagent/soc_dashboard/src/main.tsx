@@ -6,6 +6,8 @@ import App from "./App";
 import { fetchPipelineStatus } from "./api/socApi";
 import "./index.css";
 
+const COPILOT_AGENT_NAME = "soc_pipeline";
+
 // Catch any React render errors and display them instead of a silent blank page
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode; label?: string },
@@ -83,7 +85,11 @@ function Root() {
 
   return (
     <ErrorBoundary label="CopilotKit Provider">
-      <CopilotKit runtimeUrl="/copilotkit" useSingleEndpoint>
+      <CopilotKit
+        runtimeUrl="/copilotkit"
+        useSingleEndpoint
+        agent={COPILOT_AGENT_NAME}
+      >
         {app}
       </CopilotKit>
     </ErrorBoundary>

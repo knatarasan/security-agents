@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -34,6 +34,8 @@ from soc_agents.state import SOCState
 # ─── CopilotKit — correct class names for v0.1.94+ ───────────────────────────
 # v0.1.31+: CopilotKitSDK → CopilotKitRemoteEndpoint
 # v0.1.94+: LangGraphAgent → LangGraphAGUIAgent
+
+COPILOT_AGENT_NAME = "soc_pipeline"
 
 _COPILOTKIT_AVAILABLE = False
 try:
@@ -129,7 +131,7 @@ if _COPILOTKIT_AVAILABLE:
     _sdk = CopilotKitRemoteEndpoint(  # type: ignore[name-defined]
         agents=[
             LangGraphAGUIAgent(  # type: ignore[name-defined]
-                name="soc_pipeline",
+                name=COPILOT_AGENT_NAME,
                 description=(
                     "SOC multi-agent security alert triage and investigation pipeline. "
                     "Processes alerts through Supervisor → Triage → Investigation nodes."
@@ -139,6 +141,53 @@ if _COPILOTKIT_AVAILABLE:
         ]
     )
     add_fastapi_endpoint(app, _sdk, "/copilotkit")  # type: ignore[name-defined]
+
+
+@app.middleware("http")
+async def normalise_copilotkit_info_response(request: Request, call_next):
+    """Key CopilotKit info agents by name for the React runtime client."""
+    response = await call_next(request)
+    if request.url.path.rstrip("/") != "/copilotkit" or response.status_code != 200:
+        return response
+
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type:
+        return response
+
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=content_type,
+            background=response.background,
+        )
+
+    agents = payload.get("agents") if isinstance(payload, dict) else None
+    if isinstance(agents, list):
+        keyed_agents = {}
+        for index, agent in enumerate(agents):
+            if not isinstance(agent, dict):
+                continue
+            agent_id = str(agent.get("name") or agent.get("agentId") or index)
+            keyed_agents[agent_id] = {**agent, "agentId": agent_id}
+        payload = {**payload, "agents": keyed_agents}
+        body = json.dumps(payload).encode("utf-8")
+
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    return Response(
+        content=body,
+        status_code=response.status_code,
+        headers=headers,
+        media_type="application/json",
+        background=response.background,
+    )
 
 
 # ─── Request / response models ────────────────────────────────────────────────
