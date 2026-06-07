@@ -17,15 +17,15 @@ interface PipelineViewerProps {
   onComplete: (state: SOCState) => void;
 }
 
-// Type guards
-function hasTriageResult(tr: SOCState["triage_result"]): tr is TriageResult {
-  return "likely_classification" in tr;
+// Type guards — must guard against undefined before using `in`
+function hasTriageResult(tr: SOCState["triage_result"] | undefined): tr is TriageResult {
+  return tr != null && "likely_classification" in tr;
 }
 
 function hasInvestigation(
-  ir: SOCState["investigation_report"]
+  ir: SOCState["investigation_report"] | undefined
 ): ir is InvestigationReport {
-  return ir !== null && "mitre_technique" in ir;
+  return ir != null && "mitre_technique" in ir;
 }
 
 type NodeStatus = "idle" | "running" | "done" | "skipped";
@@ -96,10 +96,13 @@ function PipelineNode({ title, status, children }: PipelineNodeProps) {
 }
 
 export function PipelineViewer({ activeAlert, onComplete }: PipelineViewerProps) {
-  const { state, run, running, setState } = useCoAgent<SOCState>({
+  const { state: rawState, run, running, setState } = useCoAgent<SOCState>({
     name: "soc_pipeline",
     initialState: EMPTY_SOC_STATE,
   });
+
+  // useCoAgent state may be undefined before the first backend sync
+  const state: SOCState = rawState ?? EMPTY_SOC_STATE;
 
   const prevAlertIdRef = useRef<string | null>(null);
   const onCompleteRef = useRef(onComplete);

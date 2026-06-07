@@ -24,9 +24,14 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+import json
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from soc_agents.graph import build_soc_graph, get_mermaid_diagram
 from soc_agents.state import SOCState
@@ -103,6 +108,73 @@ def _calculate_triage_weight(corrections: list) -> float:
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+def _normalize_runtime_info(data: dict) -> dict:
+    """Align Python SDK info responses with @copilotkit/core keyed-agent contract."""
+    agents = data.get("agents")
+    if not isinstance(agents, list):
+        return data
+
+    keyed_agents: dict[str, dict] = {}
+    for agent in agents:
+        name = agent.get("name")
+        if not name:
+            continue
+        keyed_agents[name] = {
+            "name": name,
+            "description": agent.get("description") or "",
+            "className": agent.get("type", "langgraph_agui"),
+        }
+
+    return {
+        **data,
+        "version": data.get("sdkVersion", "0.0.0"),
+        "agents": keyed_agents,
+        "mode": "sse",
+        "audioFileTranscriptionEnabled": False,
+        "a2uiEnabled": False,
+    }
+
+
+class CopilotKitInfoMiddleware(BaseHTTPMiddleware):
+    """Rewrite legacy list-shaped /copilotkit info payloads for JS runtime v1.59+."""
+
+    @staticmethod
+    def _json_response(body: bytes, response: Response, media_type: str) -> Response:
+        headers = {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in ("content-length", "transfer-encoding")
+        }
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=media_type,
+        )
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+        if response.status_code != 200 or "/copilotkit" not in request.url.path:
+            return response
+
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            return response
+
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            return self._json_response(body, response, response.media_type or "application/json")
+
+        if isinstance(data, dict) and isinstance(data.get("agents"), list):
+            body = json.dumps(_normalize_runtime_info(data)).encode()
+
+        return self._json_response(body, response, "application/json")
+
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 
@@ -122,6 +194,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(CopilotKitInfoMiddleware)
 
 # ─── CopilotKit endpoint (registered at module level, not in lifespan) ────────
 

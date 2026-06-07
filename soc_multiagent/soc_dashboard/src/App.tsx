@@ -78,10 +78,10 @@ export default function App() {
         <div className="w-[40%] border-r border-gray-800 overflow-hidden flex flex-col">
           {/* Pipeline Viewer — top 60% */}
           <div className="flex-[3] border-b border-gray-800 overflow-hidden">
-            <PipelineViewer
+            {/* <PipelineViewer
               activeAlert={activeAlert}
               onComplete={handlePipelineComplete}
-            />
+            /> */}
           </div>
 
           {/* Investigation Panel — bottom 40% */}
