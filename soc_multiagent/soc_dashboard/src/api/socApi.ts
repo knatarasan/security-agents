@@ -30,7 +30,7 @@ export async function processAlert(alert: Alert): Promise<SOCState> {
   const res = await fetch(`${SOC}/process-alert`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(alert),
+    body: JSON.stringify({ alert }),
   });
   return handleResponse<SOCState>(res);
 }
@@ -47,7 +47,7 @@ export async function isolateHost(
   hostname: string,
   alertId: string
 ): Promise<{ ticket_id: string }> {
-  const res = await fetch(`${SOC}/actions/isolate-host`, {
+  const res = await fetch(`${SOC}/response/isolate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ hostname, alert_id: alertId }),
@@ -60,7 +60,7 @@ export async function createTicket(
   summary: string,
   alertId: string
 ): Promise<{ ticket_id: string }> {
-  const res = await fetch(`${SOC}/actions/create-ticket`, {
+  const res = await fetch(`${SOC}/response/ticket`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ priority, summary, alert_id: alertId }),
@@ -73,7 +73,7 @@ export async function blockIP(
   reason: string,
   alertId: string
 ): Promise<{ ticket_id?: string; status: string }> {
-  const res = await fetch(`${SOC}/actions/block-ip`, {
+  const res = await fetch(`${SOC}/response/block-ip`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ip, reason, alert_id: alertId }),
@@ -87,7 +87,13 @@ export async function submitOverride(
   const res = await fetch(`${SOC}/analyst/override`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      alert_id: body.alert_id,
+      original_classification: body.agent_classification,
+      analyst_classification: body.analyst_classification,
+      analyst_reasoning: body.reasoning,
+      confidence_adjustment: body.confidence_adjustment,
+    }),
   });
   return handleResponse<{ new_triage_weight: number; total_corrections: number }>(res);
 }
@@ -101,6 +107,6 @@ export async function fetchCorrections(): Promise<{
 }
 
 export async function fetchActionsLog(): Promise<{ actions: ActionEntry[] }> {
-  const res = await fetch(`${SOC}/actions/log`);
+  const res = await fetch(`${SOC}/response/actions-log`);
   return handleResponse<{ actions: ActionEntry[] }>(res);
 }

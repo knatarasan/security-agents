@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { CopilotKit } from "@copilotkit/react-core";
 import "@copilotkit/react-ui/styles.css";
 import App from "./App";
+import { fetchPipelineStatus } from "./api/socApi";
 import "./index.css";
 
 // Catch any React render errors and display them instead of a silent blank page
@@ -48,14 +49,49 @@ class ErrorBoundary extends React.Component<
   }
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
+function Root() {
+  const [copilotEnabled, setCopilotEnabled] = React.useState(false);
+
+  React.useEffect(() => {
+    let mounted = true;
+
+    const refreshRuntimeStatus = async () => {
+      try {
+        const status = await fetchPipelineStatus();
+        if (mounted) setCopilotEnabled(status.copilotkit_enabled);
+      } catch {
+        if (mounted) setCopilotEnabled(false);
+      }
+    };
+
+    refreshRuntimeStatus();
+    const interval = window.setInterval(refreshRuntimeStatus, 5000);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const app = (
+    <ErrorBoundary label="App">
+      <App copilotEnabled={copilotEnabled} />
+    </ErrorBoundary>
+  );
+
+  if (!copilotEnabled) return app;
+
+  return (
     <ErrorBoundary label="CopilotKit Provider">
-      <CopilotKit runtimeUrl="/copilotkit">
-        <ErrorBoundary label="App">
-          <App />
-        </ErrorBoundary>
+      <CopilotKit runtimeUrl="/copilotkit" useSingleEndpoint>
+        {app}
       </CopilotKit>
     </ErrorBoundary>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <Root />
   </React.StrictMode>
 );

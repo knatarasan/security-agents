@@ -17,42 +17,22 @@ import { cn, formatTime } from "../lib/utils";
 interface ActionPanelProps {
   activeAlert: Alert | null;
   socState: SOCState | null;
+  copilotEnabled: boolean;
 }
 
 type TicketPriority = "P1" | "P2" | "P3";
 
-export function ActionPanel({ activeAlert, socState }: ActionPanelProps) {
-  const [recentActions, setRecentActions] = useState<ActionEntry[]>([]);
-  const [showCorrectionModal, setShowCorrectionModal] = useState(false);
-  const [ticketDropdownOpen, setTicketDropdownOpen] = useState(false);
-  const [loading, setLoading] = useState<string | null>(null);
+interface CopilotActionBridgeProps {
+  activeAlert: Alert | null;
+  socState: SOCState | null;
+  loadActionsLog: () => Promise<void>;
+}
 
-  const triage = socState && hasTriageResult(socState.triage_result)
-    ? socState.triage_result
-    : null;
-  const investigation = socState && hasInvestigation(socState.investigation_report)
-    ? socState.investigation_report
-    : null;
-
-  const isTP = triage?.likely_classification === "TP";
-  const isEscalated = isTP && investigation !== null;
-  const actionsEnabled = socState !== null && activeAlert !== null;
-
-  // Load recent actions log
-  const loadActionsLog = useCallback(async () => {
-    try {
-      const data = await fetchActionsLog();
-      setRecentActions(data.actions.slice(-3).reverse());
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    loadActionsLog();
-  }, [loadActionsLog]);
-
-  // CopilotKit readables
+function CopilotActionBridge({
+  activeAlert,
+  socState,
+  loadActionsLog,
+}: CopilotActionBridgeProps) {
   useCopilotReadable({
     description: "Currently active security alert",
     value: activeAlert,
@@ -70,7 +50,6 @@ export function ActionPanel({ activeAlert, socState }: ActionPanelProps) {
     value: socState?.investigation_report,
   });
 
-  // CopilotKit actions
   useCopilotAction({
     name: "isolateHost",
     description: "Isolate a compromised host from the network",
@@ -142,6 +121,40 @@ export function ActionPanel({ activeAlert, socState }: ActionPanelProps) {
       }
     },
   });
+
+  return null;
+}
+
+export function ActionPanel({ activeAlert, socState, copilotEnabled }: ActionPanelProps) {
+  const [recentActions, setRecentActions] = useState<ActionEntry[]>([]);
+  const [showCorrectionModal, setShowCorrectionModal] = useState(false);
+  const [ticketDropdownOpen, setTicketDropdownOpen] = useState(false);
+  const [loading, setLoading] = useState<string | null>(null);
+
+  const triage = socState && hasTriageResult(socState.triage_result)
+    ? socState.triage_result
+    : null;
+  const investigation = socState && hasInvestigation(socState.investigation_report)
+    ? socState.investigation_report
+    : null;
+
+  const isTP = triage?.likely_classification === "TP";
+  const isEscalated = isTP && investigation !== null;
+  const actionsEnabled = socState !== null && activeAlert !== null;
+
+  // Load recent actions log
+  const loadActionsLog = useCallback(async () => {
+    try {
+      const data = await fetchActionsLog();
+      setRecentActions(data.actions.slice(-3).reverse());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    loadActionsLog();
+  }, [loadActionsLog]);
 
   // Manual action handlers
   const handleIsolateHost = async () => {
@@ -215,6 +228,13 @@ export function ActionPanel({ activeAlert, socState }: ActionPanelProps) {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      {copilotEnabled && (
+        <CopilotActionBridge
+          activeAlert={activeAlert}
+          socState={socState}
+          loadActionsLog={loadActionsLog}
+        />
+      )}
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-gray-900 border-b border-gray-800 shrink-0">
         <span className="text-[11px] font-mono font-semibold text-gray-300 tracking-widest uppercase">
